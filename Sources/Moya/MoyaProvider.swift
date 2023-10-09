@@ -122,7 +122,7 @@ open class MoyaProvider<Target: TargetType>: MoyaProviderType {
                       completion: @escaping Completion) -> Cancellable {
 
         let callbackQueue = callbackQueue ?? self.callbackQueue
-        return requestNormal(target, callbackQueue: callbackQueue, progress: progress, completion: completion)
+        return requestNormalAsync(target, callbackQueue: callbackQueue, progress: progress, completion: completion)
     }
 
     // swiftlint:disable function_parameter_count

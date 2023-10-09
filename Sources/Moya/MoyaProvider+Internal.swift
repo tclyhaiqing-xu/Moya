@@ -18,6 +18,67 @@ public extension Method {
 
 /// Internal extension to keep the inner-workings outside the main Moya.swift file.
 public extension MoyaProvider {
+    /// Performs normal async request
+    func requestNormalAsync(_ target: Target, callbackQueue: DispatchQueue?, progress: Moya.ProgressBlock?, completion: @escaping Moya.Completion, requestQueue: DispatchQueue = DispatchQueue.global()) -> Cancellable {
+        
+        let cancellableToken = CancellableWrapper()
+
+        requestQueue.async {
+            let endpoint = self.endpoint(target)
+            let stubBehavior = self.stubClosure(target)
+            // Allow plugins to modify response
+            let pluginsWithCompletion: Moya.Completion = { result in
+                let processedResult = self.plugins.reduce(result) { $1.process($0, target: target) }
+                completion(processedResult)
+            }
+
+            if self.trackInflights {
+                var inflightCompletionBlocks = self.inflightRequests[endpoint]
+                inflightCompletionBlocks?.append(pluginsWithCompletion)
+                self.internalInflightRequests[endpoint] = inflightCompletionBlocks
+
+                if inflightCompletionBlocks != nil {
+                    return
+                } else {
+                    self.internalInflightRequests[endpoint] = [pluginsWithCompletion]
+                }
+            }
+
+            let performNetworking = { (requestResult: Result<URLRequest, MoyaError>) in
+                if cancellableToken.isCancelled {
+                    self.cancelCompletion(pluginsWithCompletion, target: target)
+                    return
+                }
+
+                var request: URLRequest!
+
+                switch requestResult {
+                case .success(let urlRequest):
+                    request = urlRequest
+                case .failure(let error):
+                    pluginsWithCompletion(.failure(error))
+                    return
+                }
+
+                let networkCompletion: Moya.Completion = { result in
+                  if self.trackInflights {
+                    self.inflightRequests[endpoint]?.forEach { $0(result) }
+                    self.internalInflightRequests.removeValue(forKey: endpoint)
+                  } else {
+                    pluginsWithCompletion(result)
+                  }
+                }
+
+                cancellableToken.innerCancellable = self.performRequest(target, request: request, callbackQueue: callbackQueue, progress: progress, completion: networkCompletion, endpoint: endpoint, stubBehavior: stubBehavior)
+            }
+
+            self.requestClosure(endpoint, performNetworking)
+
+        }
+        
+        return cancellableToken
+    }
+    
     /// Performs normal requests.
     func requestNormal(_ target: Target, callbackQueue: DispatchQueue?, progress: Moya.ProgressBlock?, completion: @escaping Moya.Completion) -> Cancellable {
         let endpoint = self.endpoint(target)
